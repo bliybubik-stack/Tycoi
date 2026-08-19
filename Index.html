@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1.0">
+
+    <title>MonoFactory</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <link rel="stylesheet" href="Style.css">
+</head>
+
+<body>
+
+<div id="app">
+
+    <!-- TOP BAR -->
+    <header class="topbar">
+
+        <div class="brand">
+            <div class="brand-icon">MF</div>
+
+            <div>
+                <div class="brand-title">MONOFACTORY</div>
+                <div class="brand-sub">INFINITE PRODUCTION SYSTEM</div>
+            </div>
+        </div>
+
+        <div class="stats">
+            <div class="stat">
+                <span class="label">MONEY</span>
+                <span id="money">$0</span>
+            </div>
+
+            <div class="stat">
+                <span class="label">PRODUCTION</span>
+                <span id="production">0/s</span>
+            </div>
+
+            <div class="stat">
+                <span class="label">FLOOR</span>
+                <span id="floorNumber">01</span>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button id="playButton" class="control active">▶ PLAY</button>
+            <button id="pauseButton" class="control">Ⅱ PAUSE</button>
+            <button id="clearButton" class="control danger">CLEAR</button>
+        </div>
+
+    </header>
+
+
+    <!-- MAIN -->
+    <main class="main">
+
+        <!-- LEFT SIDEBAR -->
+        <aside class="sidebar">
+
+            <div class="panel-title">
+                BUILD
+            </div>
+
+            <div class="tabs">
+                <button class="tab active" data-category="conveyor">CONVEYORS</button>
+                <button class="tab" data-category="machine">MACHINES</button>
+                <button class="tab" data-category="utility">UTILITY</button>
+                <button class="tab" data-category="special">SPECIAL</button>
+            </div>
+
+            <div id="objectList" class="object-list"></div>
+
+        </aside>
+
+
+        <!-- GAME -->
+        <section class="game-area">
+
+            <canvas id="gameCanvas"></canvas>
+
+            <div class="canvas-ui">
+
+                <div class="floor-controls">
+                    <button id="previousFloor">‹</button>
+
+                    <div>
+                        <small>FLOOR</small>
+                        <strong id="floorDisplay">01</strong>
+                    </div>
+
+                    <button id="nextFloor">›</button>
+                </div>
+
+                <div class="hint">
+                    LEFT CLICK PLACE · RIGHT CLICK DELETE · MOUSE WHEEL ZOOM
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- RIGHT PANEL -->
+        <aside class="inspector">
+
+            <div class="panel-title">
+                INSPECTOR
+            </div>
+
+            <div id="inspectorContent">
+
+                <div class="empty-inspector">
+                    <div class="empty-icon">＋</div>
+                    <div>SELECT AN OBJECT</div>
+                    <small>
+                        Click something inside your factory
+                    </small>
+                </div>
+
+            </div>
+
+        </aside>
+
+    </main>
+
+</div>
+
+
+<script src="Objects.js"></script>
+<script src="Engine.js"></script>
+<script src="App.js"></script>
+
+</body>
+</html>
