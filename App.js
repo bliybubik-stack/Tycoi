@@ -1,3013 +1,2824 @@
-class FactoryEngine {
+/* ============================================================
+   FACTORY GAME — APP.JS
+   ============================================================ */
 
-    constructor(canvas) {
+(() => {
 
-        this.canvas = canvas;
-        this.ctx = canvas.getContext("2d");
+    "use strict";
 
-        this.grid = 48;
 
-        this.camera = {
-            x: 0,
-            y: 0,
-            zoom: 1
-        };
+    /* ============================================================
+       GLOBAL STATE
+    ============================================================ */
 
-        this.objects = [];
-        this.items = [];
+    const state = {
 
-        this.running = true;
+        currentCategory: "all",
 
-        this.money = 500;
-        this.production = 0;
+        selectedDefinition: null,
 
-        this.selectedObject = null;
-        this.buildDefinition = null;
+        selectedObject: null,
 
-        this.hoveredObject = null;
+        currentFloor: 1,
 
-        this.lastTime = performance.now();
+        floors: {},
 
-        this.lastMouse = {
-            x: 0,
-            y: 0
-        };
+        floorNames: {},
 
-        this.lastMouseWorld = {
-            x: 0,
-            y: 0
-        };
+        autoSave: true,
 
-        this.draggingCamera = false;
-        this.dragDistance = 0;
+        sound: false,
 
-        this.itemCounter = 0;
+        muted: true,
 
-        this.resize();
+        uiOpen: true,
 
-        window.addEventListener(
-            "resize",
-            () => this.resize()
+        draggingMenu: false,
+
+        lastMoney: 0,
+
+        lastProduction: 0,
+
+        messageTimeout: null
+    };
+
+
+    /* ============================================================
+       DOM
+    ============================================================ */
+
+    const $ = selector =>
+        document.querySelector(selector);
+
+    const $$ = selector =>
+        [...document.querySelectorAll(selector)];
+
+
+    const canvas =
+        $("#gameCanvas") ||
+        $("#canvas") ||
+        document.querySelector("canvas");
+
+
+    if (!canvas) {
+
+        console.error(
+            "Factory Engine: canvas not found."
         );
 
-        this.bindMouse();
-
-        requestAnimationFrame(
-            time => this.loop(time)
-        );
+        return;
     }
 
 
-    /* =========================================================
-       RESIZE
-    ========================================================= */
+    /* ============================================================
+       ENGINE
+    ============================================================ */
 
-    resize() {
-
-        const rect =
-            this.canvas.getBoundingClientRect();
-
-        const dpr =
-            window.devicePixelRatio || 1;
-
-        this.canvas.width =
-            Math.floor(rect.width * dpr);
-
-        this.canvas.height =
-            Math.floor(rect.height * dpr);
-
-        this.ctx.setTransform(
-            dpr,
-            0,
-            0,
-            dpr,
-            0,
-            0
-        );
-    }
+    const engine =
+        window.engine ||
+        new FactoryEngine(canvas);
 
 
-    /* =========================================================
-       COORDINATES
-    ========================================================= */
-
-    screenToWorld(x, y) {
-
-        const rect =
-            this.canvas.getBoundingClientRect();
-
-        const sx =
-            x - rect.left;
-
-        const sy =
-            y - rect.top;
-
-        return {
-
-            x:
-                (sx - rect.width / 2) /
-                this.camera.zoom +
-                this.camera.x,
-
-            y:
-                (sy - rect.height / 2) /
-                this.camera.zoom +
-                this.camera.y
-        };
-    }
+    window.engine =
+        engine;
 
 
-    worldToScreen(x, y) {
+    /* ============================================================
+       HELPERS
+    ============================================================ */
 
-        const rect =
-            this.canvas.getBoundingClientRect();
+    function formatMoney(value) {
 
-        return {
-
-            x:
-                (x - this.camera.x) *
-                this.camera.zoom +
-                rect.width / 2,
-
-            y:
-                (y - this.camera.y) *
-                this.camera.zoom +
-                rect.height / 2
-        };
-    }
+        value =
+            Number(value) || 0;
 
 
-    snap(value) {
+        if(value >= 1e12)
+            return (
+                "$" +
+                (value / 1e12).toFixed(2) +
+                "T"
+            );
+
+
+        if(value >= 1e9)
+            return (
+                "$" +
+                (value / 1e9).toFixed(2) +
+                "B"
+            );
+
+
+        if(value >= 1e6)
+            return (
+                "$" +
+                (value / 1e6).toFixed(2) +
+                "M"
+            );
+
+
+        if(value >= 1e3)
+            return (
+                "$" +
+                (value / 1e3).toFixed(2) +
+                "K"
+            );
+
 
         return (
-            Math.round(
-                value / this.grid
-            ) * this.grid
+            "$" +
+            Math.floor(value)
         );
     }
 
 
-    snapPoint(x, y) {
+    function formatNumber(value) {
 
-        return {
-            x: this.snap(x),
-            y: this.snap(y)
-        };
+        value =
+            Number(value) || 0;
+
+
+        if(value >= 1e12)
+            return (
+                (value / 1e12).toFixed(2) +
+                "T"
+            );
+
+
+        if(value >= 1e9)
+            return (
+                (value / 1e9).toFixed(2) +
+                "B"
+            );
+
+
+        if(value >= 1e6)
+            return (
+                (value / 1e6).toFixed(2) +
+                "M"
+            );
+
+
+        if(value >= 1e3)
+            return (
+                (value / 1e3).toFixed(2) +
+                "K"
+            );
+
+
+        return Math.floor(value);
     }
 
 
-    /* =========================================================
-       MOUSE
-    ========================================================= */
+    function capitalize(text) {
 
-    bindMouse() {
+        return String(text || "")
+            .replaceAll("_", " ")
+            .replace(
+                /\b\w/g,
+                c => c.toUpperCase()
+            );
+    }
 
-        this.canvas.addEventListener(
-            "mousemove",
-            e => {
 
-                this.lastMouse.x =
-                    e.clientX;
+    function getObjectList() {
 
-                this.lastMouse.y =
-                    e.clientY;
+        if(
+            typeof OBJECTS !==
+            "undefined"
+        ) {
 
-                const world =
-                    this.screenToWorld(
-                        e.clientX,
-                        e.clientY
-                    );
+            return OBJECTS;
+        }
 
-                this.lastMouseWorld =
-                    world;
 
-                const snapped =
-                    this.snapPoint(
-                        world.x,
-                        world.y
-                    );
+        if(
+            Array.isArray(
+                window.OBJECTS
+            )
+        ) {
 
-                this.hoveredObject =
-                    this.getObjectAt(
-                        snapped.x,
-                        snapped.y
-                    );
+            return window.OBJECTS;
+        }
 
-                if(
-                    this.draggingCamera
-                ) {
 
-                    const dx =
-                        e.clientX -
-                        this.dragStartMouse.x;
+        return [];
+    }
 
-                    const dy =
-                        e.clientY -
-                        this.dragStartMouse.y;
 
-                    this.dragDistance =
-                        Math.hypot(dx, dy);
+    function getCategories() {
 
-                    this.camera.x =
-                        this.dragStartCamera.x -
-                        dx / this.camera.zoom;
+        const objects =
+            getObjectList();
 
-                    this.camera.y =
-                        this.dragStartCamera.y -
-                        dy / this.camera.zoom;
-                }
+
+        const categories = [
+            "all"
+        ];
+
+
+        for(
+            const object of objects
+        ) {
+
+            const category =
+                object.category ||
+                object.type ||
+                "other";
+
+
+            if(
+                !categories.includes(
+                    category
+                )
+            ) {
+
+                categories.push(
+                    category
+                );
             }
+        }
+
+
+        return categories;
+    }
+
+
+    function getObjectCategory(
+        object
+    ) {
+
+        return (
+            object.category ||
+            object.type ||
+            "other"
         );
+    }
 
 
-        this.canvas.addEventListener(
-            "mousedown",
-            e => {
+    /* ============================================================
+       OBJECT MENU
+    ============================================================ */
 
-                if(e.button === 1) {
+    function renderObjectMenu() {
 
-                    this.draggingCamera = true;
-
-                    this.dragDistance = 0;
-
-                    this.dragStartMouse = {
-                        x: e.clientX,
-                        y: e.clientY
-                    };
-
-                    this.dragStartCamera = {
-                        x: this.camera.x,
-                        y: this.camera.y
-                    };
-
-                    return;
-                }
+        const menu =
+            $(
+                "#objectList"
+            ) ||
+            $(
+                "#objects"
+            ) ||
+            $(
+                "#buildList"
+            );
 
 
-                const world =
-                    this.screenToWorld(
-                        e.clientX,
-                        e.clientY
-                    );
-
-                const point =
-                    this.snapPoint(
-                        world.x,
-                        world.y
-                    );
+        if(!menu)
+            return;
 
 
-                /* RIGHT CLICK = DELETE */
-
-                if(e.button === 2) {
-
-                    this.deleteAt(
-                        point.x,
-                        point.y
-                    );
-
-                    return;
-                }
+        const objects =
+            getObjectList();
 
 
-                /* LEFT CLICK */
-
-                if(e.button === 0) {
+        const filtered =
+            objects.filter(
+                object => {
 
                     if(
-                        this.dragDistance > 5
-                    ) return;
-
-
-                    if(
-                        this.buildDefinition
+                        state.currentCategory ===
+                        "all"
                     ) {
 
-                        this.place(
-                            point.x,
-                            point.y
-                        );
-
-                    } else {
-
-                        const object =
-                            this.getObjectAt(
-                                point.x,
-                                point.y
-                            );
-
-                        if(object) {
-
-                            this.select(
-                                object
-                            );
-
-                        } else {
-
-                            this.clearSelection();
-                        }
+                        return true;
                     }
+
+
+                    return (
+                        getObjectCategory(
+                            object
+                        ) ===
+                        state.currentCategory
+                    );
                 }
+            );
+
+
+        menu.innerHTML = "";
+
+
+        if(
+            filtered.length === 0
+        ) {
+
+            menu.innerHTML = `
+                <div class="p-4 text-xs text-neutral-500">
+                    No objects here.
+                </div>
+            `;
+
+            return;
+        }
+
+
+        for(
+            const object of filtered
+        ) {
+
+            const card =
+                document.createElement(
+                    "button"
+                );
+
+
+            card.className = `
+                object-card
+                group
+                w-full
+                text-left
+                p-3
+                rounded-xl
+                border
+                border-neutral-800
+                bg-neutral-950
+                hover:bg-neutral-900
+                hover:border-neutral-600
+                transition
+                duration-150
+                select-none
+            `;
+
+
+            card.dataset.objectId =
+                object.id;
+
+
+            const cost =
+                Number(
+                    object.cost || 0
+                );
+
+
+            const selected =
+                state.selectedDefinition &&
+                state.selectedDefinition.id ===
+                object.id;
+
+
+            if(selected) {
+
+                card.classList.add(
+                    "selected",
+                    "border-neutral-300"
+                );
             }
-        );
 
 
-        window.addEventListener(
-            "mouseup",
-            () => {
+            card.innerHTML = `
 
-                this.draggingCamera =
-                    false;
-            }
-        );
+                <div class="flex items-center gap-3">
 
-
-        this.canvas.addEventListener(
-            "wheel",
-            e => {
-
-                e.preventDefault();
-
-                const oldZoom =
-                    this.camera.zoom;
-
-                const mouseBefore =
-                    this.screenToWorld(
-                        e.clientX,
-                        e.clientY
-                    );
+                    <div
+                        class="
+                            object-icon
+                            w-10
+                            h-10
+                            shrink-0
+                            rounded-lg
+                            bg-neutral-900
+                            border
+                            border-neutral-800
+                            flex
+                            items-center
+                            justify-center
+                            text-lg
+                        "
+                    >
+                        ${object.icon || "?"}
+                    </div>
 
 
-                const zoomAmount =
-                    e.deltaY < 0
-                    ? 1.12
-                    : 0.89;
+                    <div class="min-w-0 flex-1">
 
-                this.camera.zoom *=
-                    zoomAmount;
-
-                this.camera.zoom =
-                    Math.max(
-                        0.25,
-                        Math.min(
-                            3.5,
-                            this.camera.zoom
-                        )
-                    );
-
-
-                const mouseAfter =
-                    this.screenToWorld(
-                        e.clientX,
-                        e.clientY
-                    );
+                        <div
+                            class="
+                                object-name
+                                text-sm
+                                font-semibold
+                                text-neutral-200
+                                truncate
+                            "
+                        >
+                            ${
+                                object.name ||
+                                capitalize(object.id)
+                            }
+                        </div>
 
 
-                this.camera.x +=
-                    mouseBefore.x -
-                    mouseAfter.x;
+                        <div
+                            class="
+                                text-[10px]
+                                uppercase
+                                tracking-widest
+                                text-neutral-600
+                                mt-0.5
+                            "
+                        >
+                            ${
+                                capitalize(
+                                    getObjectCategory(
+                                        object
+                                    )
+                                )
+                            }
+                        </div>
 
-                this.camera.y +=
-                    mouseBefore.y -
-                    mouseAfter.y;
-            },
-            {
-                passive: false
-            }
-        );
+                    </div>
 
 
-        this.canvas.addEventListener(
-            "contextmenu",
-            e => {
-                e.preventDefault();
-            }
-        );
+                    <div
+                        class="
+                            object-cost
+                            text-xs
+                            font-mono
+                            text-neutral-400
+                        "
+                    >
+                        ${formatMoney(cost)}
+                    </div>
+
+                </div>
+            `;
 
 
-        this.canvas.addEventListener(
-            "dblclick",
-            e => {
+            card.addEventListener(
+                "click",
+                () => {
 
-                const world =
-                    this.screenToWorld(
-                        e.clientX,
-                        e.clientY
-                    );
-
-                const point =
-                    this.snapPoint(
-                        world.x,
-                        world.y
-                    );
-
-                const object =
-                    this.getObjectAt(
-                        point.x,
-                        point.y
-                    );
-
-                if(object) {
-
-                    this.rotateObject(
+                    selectBuildObject(
                         object
                     );
                 }
-            }
-        );
-    }
-
-
-    /* =========================================================
-       BUILD MODE
-    ========================================================= */
-
-    setBuildObject(definition) {
-
-        this.buildDefinition =
-            definition;
-
-        this.selectedObject =
-            null;
-    }
-
-
-    cancelBuild() {
-
-        this.buildDefinition =
-            null;
-    }
-
-
-    /* =========================================================
-       OBJECT PLACEMENT
-    ========================================================= */
-
-    place(x, y) {
-
-        const definition =
-            this.buildDefinition;
-
-        if(!definition)
-            return false;
-
-
-        if(
-            this.getObjectAt(x, y)
-        ) {
-
-            return false;
-        }
-
-
-        const cost =
-            Number(
-                definition.cost || 0
             );
 
 
-        if(
-            this.money < cost
-        ) {
-
-            this.flashMessage(
-                "NOT ENOUGH MONEY"
+            menu.appendChild(
+                card
             );
-
-            return false;
         }
-
-
-        this.money -= cost;
-
-
-        const object = {
-
-            uid:
-                this.createUID(),
-
-            id:
-                definition.id,
-
-            x,
-            y,
-
-            rotation: 0,
-
-            data:
-                definition,
-
-            timer: 0,
-
-            progress: 0,
-
-            direction:
-                this.getDefaultDirection(
-                    definition
-                )
-        };
-
-
-        this.objects.push(
-            object
-        );
-
-
-        /*
-         * Keep build mode active.
-         * This makes placing 50 conveyors
-         * extremely fast.
-         */
-
-        this.emitObjectPlaced(
-            object
-        );
-
-        return true;
     }
 
 
-    getDefaultDirection(definition) {
+    /* ============================================================
+       SELECT BUILD OBJECT
+    ============================================================ */
 
-        if(
-            definition.direction
-        ) {
-
-            return definition.direction;
-        }
-
-        return "right";
-    }
-
-
-    rotateObject(object) {
+    function selectBuildObject(
+        object
+    ) {
 
         if(!object)
             return;
 
-        const directions = [
-            "right",
-            "down",
-            "left",
-            "up"
-        ];
 
-        const current =
-            directions.indexOf(
-                object.direction
-            );
+        state.selectedDefinition =
+            object;
 
-        object.direction =
-            directions[
-                (current + 1) %
-                directions.length
-            ];
 
-        object.rotation =
-            directions.indexOf(
-                object.direction
-            ) * 90;
+        state.selectedObject =
+            null;
+
+
+        engine.setBuildObject(
+            object
+        );
+
+
+        updateSelectedBuildUI();
+
+        renderObjectMenu();
+
+        closeInspector();
+
+
+        showMessage(
+            `${object.name || capitalize(object.id)} selected`
+        );
     }
 
 
-    /* =========================================================
-       DELETE
-    ========================================================= */
+    function cancelBuild() {
 
-    deleteAt(x, y) {
-
-        const index =
-            this.objects.findIndex(
-                object =>
-                    object.x === x &&
-                    object.y === y
-            );
-
-        if(index === -1)
-            return false;
+        state.selectedDefinition =
+            null;
 
 
-        const object =
-            this.objects[index];
+        engine.cancelBuild();
 
 
-        const refund =
-            Math.floor(
-                Number(
-                    object.data.cost || 0
-                ) * 0.5
+        renderObjectMenu();
+
+        updateSelectedBuildUI();
+    }
+
+
+    function updateSelectedBuildUI() {
+
+        const label =
+            $(
+                "#selectedObject"
+            ) ||
+            $(
+                "#selectedBuild"
             );
 
 
-        this.money += refund;
-
-
-        this.objects.splice(
-            index,
-            1
-        );
+        if(!label)
+            return;
 
 
         if(
-            this.selectedObject ===
-            object
+            !state.selectedDefinition
         ) {
 
-            this.clearSelection();
+            label.textContent =
+                "SELECT OBJECT";
+
+            return;
         }
 
 
-        this.emitObjectDeleted(
-            object
+        label.textContent =
+            state.selectedDefinition.name ||
+            capitalize(
+                state.selectedDefinition.id
+            );
+    }
+
+
+    /* ============================================================
+       CATEGORIES
+    ============================================================ */
+
+    function renderCategories() {
+
+        const container =
+            $(
+                "#categories"
+            ) ||
+            $(
+                "#categoryList"
+            );
+
+
+        if(!container)
+            return;
+
+
+        const categories =
+            getCategories();
+
+
+        container.innerHTML = "";
+
+
+        for(
+            const category of categories
+        ) {
+
+            const button =
+                document.createElement(
+                    "button"
+                );
+
+
+            button.className = `
+                category-button
+                px-3
+                py-2
+                rounded-lg
+                text-xs
+                uppercase
+                tracking-widest
+                whitespace-nowrap
+                transition
+            `;
+
+
+            if(
+                category ===
+                state.currentCategory
+            ) {
+
+                button.classList.add(
+                    "bg-neutral-100",
+                    "text-neutral-950"
+                );
+
+            } else {
+
+                button.classList.add(
+                    "bg-neutral-900",
+                    "text-neutral-500",
+                    "hover:text-neutral-200"
+                );
+            }
+
+
+            button.textContent =
+                capitalize(
+                    category
+                );
+
+
+            button.addEventListener(
+                "click",
+                () => {
+
+                    state.currentCategory =
+                        category;
+
+                    renderCategories();
+
+                    renderObjectMenu();
+                }
+            );
+
+
+            container.appendChild(
+                button
+            );
+        }
+    }
+
+
+    /* ============================================================
+       SEARCH
+    ============================================================ */
+
+    function setupSearch() {
+
+        const search =
+            $(
+                "#objectSearch"
+            ) ||
+            $(
+                "#searchObjects"
+            );
+
+
+        if(!search)
+            return;
+
+
+        search.addEventListener(
+            "input",
+            () => {
+
+                const query =
+                    search.value
+                        .trim()
+                        .toLowerCase();
+
+
+                $$(".object-card")
+                    .forEach(
+                        card => {
+
+                            const id =
+                                String(
+                                    card.dataset.objectId ||
+                                    ""
+                                )
+                                .toLowerCase();
+
+
+                            const object =
+                                getObjectList()
+                                    .find(
+                                        x =>
+                                            x.id ===
+                                            card.dataset.objectId
+                                    );
+
+
+                            const name =
+                                String(
+                                    object?.name ||
+                                    ""
+                                )
+                                .toLowerCase();
+
+
+                            card.style.display =
+                                !query ||
+                                id.includes(query) ||
+                                name.includes(query)
+                                    ? ""
+                                    : "none";
+                        }
+                    );
+            }
         );
+    }
+
+
+    /* ============================================================
+       STATS
+    ============================================================ */
+
+    function updateStats() {
+
+        const moneyElements = [
+
+            "#money",
+
+            "#moneyValue",
+
+            "#cash",
+
+            "#cashValue"
+        ];
+
+
+        for(
+            const selector of moneyElements
+        ) {
+
+            const element =
+                $(selector);
+
+
+            if(element) {
+
+                element.textContent =
+                    formatMoney(
+                        engine.money
+                    );
+            }
+        }
+
+
+        const productionElements = [
+
+            "#production",
+
+            "#productionValue",
+
+            "#income",
+
+            "#incomeValue",
+
+            "#moneyPerSecond"
+        ];
+
+
+        for(
+            const selector of
+            productionElements
+        ) {
+
+            const element =
+                $(selector);
+
+
+            if(element) {
+
+                element.textContent =
+                    formatMoney(
+                        engine.production
+                    ) +
+                    "/s";
+            }
+        }
+
+
+        const objectElements = [
+
+            "#objectCount",
+
+            "#objectsCount",
+
+            "#machineCount"
+        ];
+
+
+        for(
+            const selector of
+            objectElements
+        ) {
+
+            const element =
+                $(selector);
+
+
+            if(element) {
+
+                element.textContent =
+                    engine.objects.length;
+            }
+        }
+
+
+        const itemElements = [
+
+            "#itemCount",
+
+            "#itemsCount"
+        ];
+
+
+        for(
+            const selector of
+            itemElements
+        ) {
+
+            const element =
+                $(selector);
+
+
+            if(element) {
+
+                element.textContent =
+                    engine.items.length;
+            }
+        }
+
+
+        const floorElements = [
+
+            "#floor",
+
+            "#floorNumber",
+
+            "#currentFloor"
+        ];
+
+
+        for(
+            const selector of
+            floorElements
+        ) {
+
+            const element =
+                $(selector);
+
+
+            if(element) {
+
+                element.textContent =
+                    state.currentFloor;
+            }
+        }
+    }
+
+
+    /* ============================================================
+       INSPECTOR
+    ============================================================ */
+
+    function setupInspector() {
+
+        const deleteButton =
+            $(
+                "#deleteObject"
+            ) ||
+            $(
+                "#deleteSelected"
+            );
+
+
+        if(deleteButton) {
+
+            deleteButton.addEventListener(
+                "click",
+                () => {
+
+                    if(
+                        engine.selectedObject
+                    ) {
+
+                        engine.deleteSelected();
+
+                        closeInspector();
+                    }
+                }
+            );
+        }
+
+
+        const rotateButton =
+            $(
+                "#rotateObject"
+            ) ||
+            $(
+                "#rotateSelected"
+            );
+
+
+        if(rotateButton) {
+
+            rotateButton.addEventListener(
+                "click",
+                () => {
+
+                    if(
+                        engine.selectedObject
+                    ) {
+
+                        engine.rotateObject(
+                            engine.selectedObject
+                        );
+
+                        renderInspector(
+                            engine.selectedObject
+                        );
+                    }
+                }
+            );
+        }
+
+
+        const closeButton =
+            $(
+                "#closeInspector"
+            );
+
+
+        if(closeButton) {
+
+            closeButton.addEventListener(
+                "click",
+                closeInspector
+            );
+        }
+    }
+
+
+    function renderInspector(
+        object
+    ) {
+
+        const inspector =
+            $(
+                "#inspector"
+            );
+
+
+        if(!inspector)
+            return;
+
+
+        if(!object) {
+
+            closeInspector();
+
+            return;
+        }
+
+
+        const data =
+            object.data || {};
+
+
+        inspector.classList.remove(
+            "hidden"
+        );
+
+
+        inspector.innerHTML = `
+
+            <div
+                class="
+                    p-4
+                    space-y-4
+                "
+            >
+
+                <div class="flex items-start justify-between gap-3">
+
+                    <div>
+
+                        <div
+                            class="
+                                text-[10px]
+                                uppercase
+                                tracking-[0.2em]
+                                text-neutral-600
+                            "
+                        >
+                            INSPECTOR
+                        </div>
+
+
+                        <div
+                            class="
+                                text-lg
+                                font-semibold
+                                text-neutral-100
+                                mt-1
+                            "
+                        >
+                            ${
+                                data.name ||
+                                capitalize(data.id)
+                            }
+                        </div>
+
+                    </div>
+
+
+                    <button
+                        id="closeInspector"
+                        class="
+                            w-8
+                            h-8
+                            rounded-lg
+                            bg-neutral-900
+                            text-neutral-500
+                            hover:text-white
+                        "
+                    >
+                        ×
+                    </button>
+
+                </div>
+
+
+                <div
+                    class="
+                        grid
+                        grid-cols-2
+                        gap-2
+                    "
+                >
+
+                    <div
+                        class="
+                            rounded-lg
+                            border
+                            border-neutral-800
+                            bg-neutral-950
+                            p-3
+                        "
+                    >
+
+                        <div
+                            class="
+                                text-[9px]
+                                uppercase
+                                tracking-widest
+                                text-neutral-600
+                            "
+                        >
+                            POSITION
+                        </div>
+
+                        <div
+                            class="
+                                text-xs
+                                font-mono
+                                text-neutral-300
+                                mt-1
+                            "
+                        >
+                            ${object.x / engine.grid},
+                            ${object.y / engine.grid}
+                        </div>
+
+                    </div>
+
+
+                    <div
+                        class="
+                            rounded-lg
+                            border
+                            border-neutral-800
+                            bg-neutral-950
+                            p-3
+                        "
+                    >
+
+                        <div
+                            class="
+                                text-[9px]
+                                uppercase
+                                tracking-widest
+                                text-neutral-600
+                            "
+                        >
+                            ROTATION
+                        </div>
+
+                        <div
+                            class="
+                                text-xs
+                                font-mono
+                                text-neutral-300
+                                mt-1
+                            "
+                        >
+                            ${object.rotation || 0}°
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                ${
+                    data.multiplier
+                    ? `
+                        <div
+                            class="
+                                p-3
+                                rounded-lg
+                                border
+                                border-neutral-800
+                                bg-neutral-950
+                            "
+                        >
+
+                            <div
+                                class="
+                                    text-[9px]
+                                    uppercase
+                                    tracking-widest
+                                    text-neutral-600
+                                "
+                            >
+                                MULTIPLIER
+                            </div>
+
+                            <div
+                                class="
+                                    text-xl
+                                    font-bold
+                                    text-neutral-200
+                                    mt-1
+                                "
+                            >
+                                ×${data.multiplier}
+                            </div>
+
+                        </div>
+                    `
+                    : ""
+                }
+
+
+                <div
+                    class="
+                        flex
+                        gap-2
+                    "
+                >
+
+                    <button
+                        id="rotateObject"
+                        class="
+                            flex-1
+                            py-2.5
+                            rounded-lg
+                            bg-neutral-900
+                            border
+                            border-neutral-800
+                            text-xs
+                            text-neutral-300
+                            hover:bg-neutral-800
+                        "
+                    >
+                        ROTATE
+                    </button>
+
+
+                    <button
+                        id="deleteObject"
+                        class="
+                            flex-1
+                            py-2.5
+                            rounded-lg
+                            bg-neutral-900
+                            border
+                            border-neutral-800
+                            text-xs
+                            text-neutral-400
+                            hover:bg-neutral-800
+                            hover:text-white
+                        "
+                    >
+                        DELETE
+                    </button>
+
+                </div>
+
+            </div>
+        `;
+
+
+        inspector
+            .querySelector(
+                "#closeInspector"
+            )
+            ?.addEventListener(
+                "click",
+                closeInspector
+            );
+
+
+        inspector
+            .querySelector(
+                "#rotateObject"
+            )
+            ?.addEventListener(
+                "click",
+                () => {
+
+                    engine.rotateObject(
+                        object
+                    );
+
+                    renderInspector(
+                        object
+                    );
+                }
+            );
+
+
+        inspector
+            .querySelector(
+                "#deleteObject"
+            )
+            ?.addEventListener(
+                "click",
+                () => {
+
+                    engine.deleteAt(
+                        object.x,
+                        object.y
+                    );
+
+                    closeInspector();
+                }
+            );
+    }
+
+
+    function closeInspector() {
+
+        const inspector =
+            $(
+                "#inspector"
+            );
+
+
+        if(inspector) {
+
+            inspector.classList.add(
+                "hidden"
+            );
+        }
+    }
+
+
+    /* ============================================================
+       FLOOR SYSTEM
+    ============================================================ */
+
+    function saveCurrentFloor() {
+
+        state.floors[
+            state.currentFloor
+        ] =
+            engine.exportFloor();
+    }
+
+
+    function loadFloor(
+        floorNumber
+    ) {
+
+        saveCurrentFloor();
+
+
+        state.currentFloor =
+            Math.max(
+                1,
+                Number(
+                    floorNumber
+                )
+            );
+
+
+        const floorData =
+            state.floors[
+                state.currentFloor
+            ] || [];
+
+
+        engine.importFloor(
+            floorData
+        );
+
+
+        closeInspector();
+
+        cancelBuild();
+
+        updateStats();
+
+        showMessage(
+            `Floor ${state.currentFloor}`
+        );
+    }
+
+
+    function createFloor() {
+
+        saveCurrentFloor();
+
+
+        const floors =
+            Object.keys(
+                state.floors
+            )
+            .map(Number);
+
+
+        const next =
+            floors.length
+                ? Math.max(...floors) + 1
+                : state.currentFloor + 1;
+
+
+        state.floors[next] = [];
+
+
+        loadFloor(next);
+
+        renderFloors();
+
+        saveGame();
+    }
+
+
+    function renderFloors() {
+
+        const container =
+            $(
+                "#floorList"
+            );
+
+
+        if(!container)
+            return;
+
+
+        const floorNumbers =
+            Object.keys(
+                state.floors
+            )
+            .map(Number)
+            .sort(
+                (a, b) =>
+                    a - b
+            );
+
+
+        if(
+            !floorNumbers.includes(
+                state.currentFloor
+            )
+        ) {
+
+            floorNumbers.push(
+                state.currentFloor
+            );
+        }
+
+
+        container.innerHTML = "";
+
+
+        for(
+            const floor of floorNumbers
+        ) {
+
+            const button =
+                document.createElement(
+                    "button"
+                );
+
+
+            const active =
+                floor ===
+                state.currentFloor;
+
+
+            button.className = `
+                w-full
+                flex
+                items-center
+                justify-between
+                px-3
+                py-2
+                rounded-lg
+                text-xs
+                transition
+                ${
+                    active
+                    ? "bg-neutral-100 text-neutral-950"
+                    : "bg-neutral-900 text-neutral-500 hover:text-neutral-200"
+                }
+            `;
+
+
+            button.innerHTML = `
+
+                <span>
+                    FLOOR ${floor}
+                </span>
+
+                <span
+                    class="
+                        opacity-50
+                        font-mono
+                    "
+                >
+                    ${
+                        (
+                            state.floors[floor] ||
+                            []
+                        ).length
+                    }
+                </span>
+            `;
+
+
+            button.addEventListener(
+                "click",
+                () => {
+
+                    loadFloor(
+                        floor
+                    );
+
+                    renderFloors();
+                }
+            );
+
+
+            container.appendChild(
+                button
+            );
+        }
+    }
+
+
+    function setupFloors() {
+
+        const add =
+            $(
+                "#addFloor"
+            ) ||
+            $(
+                "#newFloor"
+            );
+
+
+        if(add) {
+
+            add.addEventListener(
+                "click",
+                createFloor
+            );
+        }
+
+
+        state.floors[1] = [];
+
+        renderFloors();
+    }
+
+
+    /* ============================================================
+       SAVE / LOAD
+    ============================================================ */
+
+    const SAVE_KEY =
+        "factory_game_save_v1";
+
+
+    function saveGame() {
+
+        if(!state.autoSave)
+            return;
+
+
+        saveCurrentFloor();
+
+
+        const save = {
+
+            money:
+                engine.money,
+
+            currentFloor:
+                state.currentFloor,
+
+            floors:
+                state.floors,
+
+            floorNames:
+                state.floorNames,
+
+            version: 1,
+
+            savedAt:
+                Date.now()
+        };
+
+
+        try {
+
+            localStorage.setItem(
+                SAVE_KEY,
+                JSON.stringify(save)
+            );
+
+        } catch(error) {
+
+            console.warn(
+                "Could not save game.",
+                error
+            );
+        }
+    }
+
+
+    function loadGame() {
+
+        try {
+
+            const raw =
+                localStorage.getItem(
+                    SAVE_KEY
+                );
+
+
+            if(!raw)
+                return false;
+
+
+            const save =
+                JSON.parse(raw);
+
+
+            if(
+                !save ||
+                save.version !== 1
+            ) {
+
+                return false;
+            }
+
+
+            engine.money =
+                Number(
+                    save.money || 500
+                );
+
+
+            state.floors =
+                save.floors || {};
+
+
+            state.floorNames =
+                save.floorNames || {};
+
+
+            state.currentFloor =
+                Number(
+                    save.currentFloor || 1
+                );
+
+
+            if(
+                !state.floors[
+                    state.currentFloor
+                ]
+            ) {
+
+                state.floors[
+                    state.currentFloor
+                ] = [];
+            }
+
+
+            engine.importFloor(
+                state.floors[
+                    state.currentFloor
+                ]
+            );
+
+
+            renderFloors();
+
+            updateStats();
+
+            return true;
+
+        } catch(error) {
+
+            console.warn(
+                "Could not load save.",
+                error
+            );
+
+            return false;
+        }
+    }
+
+
+    function resetGame() {
+
+        const confirmed =
+            window.confirm(
+                "Delete your entire factory?"
+            );
+
+
+        if(!confirmed)
+            return;
+
+
+        localStorage.removeItem(
+            SAVE_KEY
+        );
+
+
+        engine.clearFactory();
+
+
+        engine.money =
+            500;
+
+
+        state.currentFloor =
+            1;
+
+
+        state.floors = {
+            1: []
+        };
+
+
+        state.selectedDefinition =
+            null;
+
+
+        state.selectedObject =
+            null;
+
+
+        engine.cancelBuild();
+
+
+        renderFloors();
+
+        updateStats();
+
+        renderObjectMenu();
+
+        closeInspector();
+
+
+        showMessage(
+            "Factory reset"
+        );
+    }
+
+
+    function setupSaveButtons() {
+
+        const save =
+            $(
+                "#saveGame"
+            );
+
+
+        if(save) {
+
+            save.addEventListener(
+                "click",
+                () => {
+
+                    saveCurrentFloor();
+
+                    localStorage.setItem(
+                        SAVE_KEY,
+                        JSON.stringify({
+
+                            money:
+                                engine.money,
+
+                            currentFloor:
+                                state.currentFloor,
+
+                            floors:
+                                state.floors,
+
+                            floorNames:
+                                state.floorNames,
+
+                            version: 1,
+
+                            savedAt:
+                                Date.now()
+                        })
+                    );
+
+
+                    showMessage(
+                        "Game saved"
+                    );
+                }
+            );
+        }
+
+
+        const reset =
+            $(
+                "#resetGame"
+            );
+
+
+        if(reset) {
+
+            reset.addEventListener(
+                "click",
+                resetGame
+            );
+        }
+    }
+
+
+    /* ============================================================
+       MESSAGE SYSTEM
+    ============================================================ */
+
+    function showMessage(
+        message
+    ) {
+
+        let toast =
+            $(
+                "#toast"
+            );
+
+
+        if(!toast) {
+
+            toast =
+                document.createElement(
+                    "div"
+                );
+
+
+            toast.id =
+                "toast";
+
+
+            toast.className = `
+                fixed
+                left-1/2
+                bottom-6
+                -translate-x-1/2
+                z-[9999]
+                pointer-events-none
+                px-4
+                py-2.5
+                rounded-xl
+                border
+                border-neutral-700
+                bg-neutral-950
+                text-neutral-200
+                text-xs
+                font-mono
+                shadow-2xl
+                transition
+                duration-200
+            `;
+
+
+            document.body.appendChild(
+                toast
+            );
+        }
+
+
+        toast.textContent =
+            message;
+
+
+        toast.style.opacity =
+            "1";
+
+
+        clearTimeout(
+            state.messageTimeout
+        );
+
+
+        state.messageTimeout =
+            setTimeout(
+                () => {
+
+                    toast.style.opacity =
+                        "0";
+
+                },
+                1400
+            );
+    }
+
+
+    /* ============================================================
+       ENGINE EVENTS
+    ============================================================ */
+
+    window.addEventListener(
+        "factorySelect",
+        event => {
+
+            const object =
+                event.detail;
+
+
+            state.selectedObject =
+                object;
+
+
+            state.selectedDefinition =
+                null;
+
+
+            engine.cancelBuild();
+
+
+            renderInspector(
+                object
+            );
+
+
+            renderObjectMenu();
+        }
+    );
+
+
+    window.addEventListener(
+        "factoryDeselect",
+        () => {
+
+            state.selectedObject =
+                null;
+
+            closeInspector();
+        }
+    );
+
+
+    window.addEventListener(
+        "factoryObjectPlaced",
+        event => {
+
+            const object =
+                event.detail;
+
+
+            state.selectedObject =
+                object;
+
+
+            /*
+             * Keep building the same object.
+             */
+
+            if(
+                state.selectedDefinition
+            ) {
+
+                engine.setBuildObject(
+                    state.selectedDefinition
+                );
+            }
+
+
+            updateStats();
+        }
+    );
+
+
+    window.addEventListener(
+        "factoryObjectDeleted",
+        () => {
+
+            updateStats();
+
+            saveGame();
+        }
+    );
+
+
+    window.addEventListener(
+        "factoryMessage",
+        event => {
+
+            showMessage(
+                event.detail.message
+            );
+        }
+    );
+
+
+    window.addEventListener(
+        "factoryTick",
+        event => {
+
+            const data =
+                event.detail;
+
+
+            updateStats();
+
+
+            /*
+             * Autosave every ~5 seconds.
+             */
+
+            if(
+                state.autoSave
+            ) {
+
+                autoSaveTimer +=
+                    1 / 60;
+
+
+                if(
+                    autoSaveTimer >= 5
+                ) {
+
+                    autoSaveTimer = 0;
+
+                    saveGame();
+                }
+            }
+        }
+    );
+
+
+    let autoSaveTimer = 0;
+
+
+    /* ============================================================
+       KEYBOARD
+    ============================================================ */
+
+    function setupKeyboard() {
+
+        window.addEventListener(
+            "keydown",
+            event => {
+
+                /*
+                 * Don't trigger shortcuts
+                 * while typing.
+                 */
+
+                const tag =
+                    event.target?.tagName;
+
+
+                if(
+                    tag === "INPUT" ||
+                    tag === "TEXTAREA"
+                ) {
+
+                    return;
+                }
+
+
+                /*
+                 * ESC
+                 */
+
+                if(
+                    event.key ===
+                    "Escape"
+                ) {
+
+                    cancelBuild();
+
+                    closeInspector();
+
+                    return;
+                }
+
+
+                /*
+                 * R
+                 */
+
+                if(
+                    event.key.toLowerCase() ===
+                    "r"
+                ) {
+
+                    if(
+                        engine.selectedObject
+                    ) {
+
+                        engine.rotateObject(
+                            engine.selectedObject
+                        );
+
+                        renderInspector(
+                            engine.selectedObject
+                        );
+
+                    } else if(
+                        state.selectedDefinition
+                    ) {
+
+                        /*
+                         * Rotation of future
+                         * conveyor placements.
+                         */
+
+                        engine.buildRotation =
+                            (
+                                engine.buildRotation ||
+                                0
+                            ) + 90;
+                    }
+
+                    return;
+                }
+
+
+                /*
+                 * DELETE / BACKSPACE
+                 */
+
+                if(
+                    event.key ===
+                    "Delete" ||
+                    event.key ===
+                    "Backspace"
+                ) {
+
+                    if(
+                        engine.selectedObject
+                    ) {
+
+                        engine.deleteSelected();
+
+                        closeInspector();
+                    }
+
+                    return;
+                }
+
+
+                /*
+                 * SPACE
+                 */
+
+                if(
+                    event.code ===
+                    "Space"
+                ) {
+
+                    event.preventDefault();
+
+                    engine.running =
+                        !engine.running;
+
+
+                    showMessage(
+                        engine.running
+                            ? "Factory resumed"
+                            : "Factory paused"
+                    );
+                }
+
+
+                /*
+                 * Number keys = floors
+                 */
+
+                if(
+                    /^[1-9]$/.test(
+                        event.key
+                    )
+                ) {
+
+                    const floor =
+                        Number(
+                            event.key
+                        );
+
+
+                    if(
+                        state.floors[floor]
+                    ) {
+
+                        loadFloor(
+                            floor
+                        );
+
+                        renderFloors();
+                    }
+                }
+            }
+        );
+    }
+
+
+    /* ============================================================
+       PAUSE BUTTON
+    ============================================================ */
+
+    function setupPause() {
+
+        const button =
+            $(
+                "#pauseButton"
+            ) ||
+            $(
+                "#pause"
+            );
+
+
+        if(!button)
+            return;
+
+
+        button.addEventListener(
+            "click",
+            () => {
+
+                engine.running =
+                    !engine.running;
+
+
+                button.textContent =
+                    engine.running
+                        ? "Ⅱ"
+                        : "▶";
+
+
+                showMessage(
+                    engine.running
+                        ? "Factory resumed"
+                        : "Factory paused"
+                );
+            }
+        );
+    }
+
+
+    /* ============================================================
+       CAMERA CONTROLS
+    ============================================================ */
+
+    function setupCameraButtons() {
+
+        const zoomIn =
+            $(
+                "#zoomIn"
+            );
+
+
+        const zoomOut =
+            $(
+                "#zoomOut"
+            );
+
+
+        const resetCamera =
+            $(
+                "#resetCamera"
+            );
+
+
+        if(zoomIn) {
+
+            zoomIn.addEventListener(
+                "click",
+                () => {
+
+                    engine.camera.zoom =
+                        Math.min(
+                            3.5,
+                            engine.camera.zoom *
+                            1.15
+                        );
+                }
+            );
+        }
+
+
+        if(zoomOut) {
+
+            zoomOut.addEventListener(
+                "click",
+                () => {
+
+                    engine.camera.zoom =
+                        Math.max(
+                            .25,
+                            engine.camera.zoom /
+                            1.15
+                        );
+                }
+            );
+        }
+
+
+        if(resetCamera) {
+
+            resetCamera.addEventListener(
+                "click",
+                () => {
+
+                    engine.camera.x = 0;
+
+                    engine.camera.y = 0;
+
+                    engine.camera.zoom = 1;
+                }
+            );
+        }
+    }
+
+
+    /* ============================================================
+       DELETE MODE
+    ============================================================ */
+
+    function setupDeleteMode() {
+
+        const button =
+            $(
+                "#deleteMode"
+            );
+
+
+        if(!button)
+            return;
+
+
+        let active = false;
+
+
+        button.addEventListener(
+            "click",
+            () => {
+
+                active =
+                    !active;
+
+
+                button.classList.toggle(
+                    "bg-neutral-100",
+                    active
+                );
+
+
+                button.classList.toggle(
+                    "text-neutral-950",
+                    active
+                );
+
+
+                if(active) {
+
+                    state.selectedDefinition =
+                        null;
+
+                    engine.cancelBuild();
+
+                    showMessage(
+                        "Delete mode"
+                    );
+
+                } else {
+
+                    showMessage(
+                        "Delete mode off"
+                    );
+                }
+            }
+        );
+
+
+        canvas.addEventListener(
+            "mousedown",
+            event => {
+
+                if(
+                    !active ||
+                    event.button !== 0
+                )
+                    return;
+
+
+                const world =
+                    engine.screenToWorld(
+                        event.clientX,
+                        event.clientY
+                    );
+
+
+                const point =
+                    engine.snapPoint(
+                        world.x,
+                        world.y
+                    );
+
+
+                engine.deleteAt(
+                    point.x,
+                    point.y
+                );
+            }
+        );
+    }
+
+
+    /* ============================================================
+       MOBILE PANEL
+    ============================================================ */
+
+    function setupMobileMenu() {
+
+        const toggle =
+            $(
+                "#buildToggle"
+            ) ||
+            $(
+                "#toggleBuild"
+            );
+
+
+        const panel =
+            $(
+                "#buildPanel"
+            ) ||
+            $(
+                "#objectPanel"
+            );
+
+
+        if(
+            !toggle ||
+            !panel
+        )
+            return;
+
+
+        toggle.addEventListener(
+            "click",
+            () => {
+
+                panel.classList.toggle(
+                    "hidden"
+                );
+            }
+        );
+    }
+
+
+    /* ============================================================
+       QUICK BUILD BUTTONS
+    ============================================================ */
+
+    function setupQuickButtons() {
+
+        $$(
+            "[data-build]"
+        ).forEach(
+            button => {
+
+                button.addEventListener(
+                    "click",
+                    () => {
+
+                        const id =
+                            button.dataset.build;
+
+
+                        const object =
+                            getObjectList()
+                                .find(
+                                    x =>
+                                        x.id === id
+                                );
+
+
+                        if(object) {
+
+                            selectBuildObject(
+                                object
+                            );
+                        }
+                    }
+                );
+            }
+        );
+    }
+
+
+    /* ============================================================
+       FLOOR HOTKEY BUTTONS
+    ============================================================ */
+
+    $$(
+        "[data-floor]"
+    ).forEach(
+        button => {
+
+            button.addEventListener(
+                "click",
+                () => {
+
+                    loadFloor(
+                        Number(
+                            button.dataset.floor
+                        )
+                    );
+
+                    renderFloors();
+                }
+            );
+        }
+    );
+
+
+    /* ============================================================
+       SOUND
+    ============================================================ */
+
+    function setupSound() {
+
+        const button =
+            $(
+                "#soundToggle"
+            ) ||
+            $(
+                "#muteButton"
+            );
+
+
+        if(!button)
+            return;
+
+
+        button.addEventListener(
+            "click",
+            () => {
+
+                state.muted =
+                    !state.muted;
+
+
+                button.textContent =
+                    state.muted
+                        ? "MUTE"
+                        : "SOUND";
+
+
+                showMessage(
+                    state.muted
+                        ? "Sound muted"
+                        : "Sound enabled"
+                );
+            }
+        );
+    }
+
+
+    /* ============================================================
+       FULLSCREEN
+    ============================================================ */
+
+    function setupFullscreen() {
+
+        const button =
+            $(
+                "#fullscreen"
+            ) ||
+            $(
+                "#fullscreenButton"
+            );
+
+
+        if(!button)
+            return;
+
+
+        button.addEventListener(
+            "click",
+            async () => {
+
+                try {
+
+                    if(
+                        !document.fullscreenElement
+                    ) {
+
+                        await document.documentElement
+                            .requestFullscreen();
+
+                    } else {
+
+                        await document
+                            .exitFullscreen();
+                    }
+
+                } catch(error) {
+
+                    console.warn(
+                        "Fullscreen failed",
+                        error
+                    );
+                }
+            }
+        );
+    }
+
+
+    /* ============================================================
+       NEW FACTORY
+    ============================================================ */
+
+    function setupNewFactory() {
+
+        const button =
+            $(
+                "#newFactory"
+            );
+
+
+        if(!button)
+            return;
+
+
+        button.addEventListener(
+            "click",
+            () => {
+
+                resetGame();
+            }
+        );
+    }
+
+
+    /* ============================================================
+       OBJECT COUNT LIMIT
+    ============================================================ */
+
+    function checkFactoryLimit() {
+
+        const MAX_OBJECTS =
+            10000;
+
+
+        if(
+            engine.objects.length >=
+            MAX_OBJECTS
+        ) {
+
+            engine.cancelBuild();
+
+
+            showMessage(
+                "Factory object limit reached"
+            );
+
+
+            return false;
+        }
+
 
         return true;
     }
 
 
-    deleteSelected() {
+    /*
+     * Wrap placement so we can enforce
+     * the limit without touching Engine.js.
+     */
 
-        if(
-            !this.selectedObject
-        )
-            return false;
-
-
-        return this.deleteAt(
-            this.selectedObject.x,
-            this.selectedObject.y
+    const originalPlace =
+        engine.place.bind(
+            engine
         );
-    }
 
 
-    /* =========================================================
-       LOOKUPS
-    ========================================================= */
-
-    getObjectAt(x, y) {
-
-        return this.objects.find(
-            object =>
-                object.x === x &&
-                object.y === y
-        ) || null;
-    }
-
-
-    getObjectsByType(type) {
-
-        return this.objects.filter(
-            object =>
-                object.data.type === type
-        );
-    }
-
-
-    getObjectById(id) {
-
-        return this.objects.find(
-            object =>
-                object.id === id
-        ) || null;
-    }
-
-
-    /* =========================================================
-       SELECTION
-    ========================================================= */
-
-    select(object) {
-
-        this.selectedObject =
-            object;
-
-        window.dispatchEvent(
-            new CustomEvent(
-                "factorySelect",
-                {
-                    detail: object
-                }
-            )
-        );
-    }
-
-
-    clearSelection() {
-
-        this.selectedObject =
-            null;
-
-        window.dispatchEvent(
-            new CustomEvent(
-                "factoryDeselect"
-            )
-        );
-    }
-
-
-    /* =========================================================
-       GAME UPDATE
-    ========================================================= */
-
-    update(dt) {
-
-        if(!this.running)
-            return;
-
-
-        let income = 0;
-
-
-        /*
-         * SPAWNERS
-         */
-
-        for(
-            const object of this.objects
-        ) {
-
-            const data =
-                object.data;
-
+    engine.place =
+        function(x, y) {
 
             if(
-                data.type === "spawner"
+                !checkFactoryLimit()
             ) {
 
-                object.timer += dt;
-
-
-                const interval =
-                    Math.max(
-                        0.05,
-                        Number(
-                            data.interval || 1
-                        )
-                    );
-
-
-                if(
-                    object.timer >=
-                    interval
-                ) {
-
-                    object.timer -=
-                        interval;
-
-                    this.spawnItem(
-                        object
-                    );
-                }
+                return false;
             }
+
+
+            const result =
+                originalPlace(
+                    x,
+                    y
+                );
+
+
+            if(result) {
+
+                updateStats();
+            }
+
+
+            return result;
+        };
+
+
+    /* ============================================================
+       DEBUG API
+    ============================================================ */
+
+    window.FactoryApp = {
+
+        state,
+
+        engine,
+
+        save:
+            saveGame,
+
+        load:
+            loadGame,
+
+        reset:
+            resetGame,
+
+        newFloor:
+            createFloor,
+
+        select:
+            selectBuildObject,
+
+        cancel:
+            cancelBuild,
+
+        showMessage
+    };
+
+
+    /* ============================================================
+       INITIALIZE
+    ============================================================ */
+
+    function init() {
+
+        console.log(
+            "%cFACTORY ENGINE ONLINE",
+            "font-weight:bold;font-size:18px"
+        );
+
+
+        const loaded =
+            loadGame();
+
+
+        if(!loaded) {
+
+            state.floors = {
+                1: []
+            };
+
+
+            state.currentFloor =
+                1;
 
 
             /*
-             * BANK
+             * Starting cash
              */
 
             if(
-                data.type === "bank"
+                typeof engine.money !==
+                "number"
             ) {
 
-                income +=
-                    dt * 2;
+                engine.money =
+                    500;
             }
         }
 
 
+        renderCategories();
+
+        renderObjectMenu();
+
+        renderFloors();
+
+        updateSelectedBuildUI();
+
+        updateStats();
+
+
+        setupSearch();
+
+        setupInspector();
+
+        setupFloors();
+
+        setupSaveButtons();
+
+        setupKeyboard();
+
+        setupPause();
+
+        setupCameraButtons();
+
+        setupDeleteMode();
+
+        setupMobileMenu();
+
+        setupQuickButtons();
+
+        setupSound();
+
+        setupFullscreen();
+
+        setupNewFactory();
+
+
         /*
-         * MOVE ITEMS
+         * Start centered.
          */
-
-        this.updateItems(
-            dt
-        );
-
-
-        /*
-         * COLLECTOR MONEY
-         */
-
-        const collected =
-            this.processCollectors();
-
-
-        income += collected;
-
-
-        /*
-         * PASSIVE INCOME
-         */
-
-        this.money +=
-            income;
-
-
-        /*
-         * PRODUCTION STAT
-         */
-
-        const safeDt =
-            Math.max(
-                dt,
-                0.001
-            );
-
-
-        this.production =
-            income / safeDt;
-    }
-
-
-    /* =========================================================
-       SPAWN ITEM
-    ========================================================= */
-
-    spawnItem(spawner) {
-
-        const data =
-            spawner.data;
-
-
-        const item = {
-
-            id:
-                ++this.itemCounter,
-
-            x:
-                spawner.x,
-
-            y:
-                spawner.y,
-
-            previousX:
-                spawner.x,
-
-            previousY:
-                spawner.y,
-
-            progress: 0,
-
-            value:
-                Number(
-                    data.value || 1
-                ),
-
-            speed: 1,
-
-            alive: true,
-
-            lastObject:
-                spawner.uid,
-
-            direction:
-                spawner.direction ||
-                "right"
-        };
-
-
-        this.items.push(
-            item
-        );
-    }
-
-
-    /* =========================================================
-       ITEM UPDATE
-    ========================================================= */
-
-    updateItems(dt) {
-
-        for(
-            const item of this.items
-        ) {
-
-            if(!item.alive)
-                continue;
-
-
-            const conveyor =
-                this.findConveyorForItem(
-                    item
-                );
-
-
-            if(!conveyor) {
-
-                /*
-                 * Items can sit on the
-                 * spawner tile until a
-                 * conveyor is available.
-                 */
-
-                continue;
-            }
-
-
-            const speed =
-                this.calculateItemSpeed(
-                    item,
-                    conveyor
-                );
-
-
-            item.progress +=
-                dt * speed;
-
-
-            if(
-                item.progress >= 1
-            ) {
-
-                item.progress -= 1;
-
-
-                item.previousX =
-                    item.x;
-
-                item.previousY =
-                    item.y;
-
-
-                const next =
-                    this.getNextTile(
-                        conveyor
-                    );
-
-
-                if(!next) {
-
-                    /*
-                     * No connected conveyor.
-                     * Item waits at end.
-                     */
-
-                    item.progress = 0;
-
-                    continue;
-                }
-
-
-                const nextObject =
-                    this.getObjectAt(
-                        next.x,
-                        next.y
-                    );
-
-
-                item.x =
-                    next.x;
-
-                item.y =
-                    next.y;
-
-
-                item.direction =
-                    conveyor.direction;
-
-
-                item.lastObject =
-                    conveyor.uid;
-
-
-                /*
-                 * MACHINE PROCESSING
-                 */
-
-                if(nextObject) {
-
-                    this.processItemAtObject(
-                        item,
-                        nextObject
-                    );
-                }
-            }
-        }
-
-
-        this.items =
-            this.items.filter(
-                item =>
-                    item.alive
-            );
-    }
-
-
-    /* =========================================================
-       FIND CONVEYOR
-    ========================================================= */
-
-    findConveyorForItem(item) {
-
-        const current =
-            this.getObjectAt(
-                item.x,
-                item.y
-            );
-
 
         if(
-            current &&
-            current.data.type ===
-            "conveyor"
+            !loaded
         ) {
 
-            return current;
+            engine.camera.x = 0;
+
+            engine.camera.y = 0;
+
+            engine.camera.zoom = 1;
         }
 
 
         /*
-         * Look around the current tile
-         * for an entrance conveyor.
+         * Initial message.
          */
 
-        const directions = [
-            {
-                x: this.grid,
-                y: 0,
-                opposite: "left"
+        setTimeout(
+            () => {
+
+                showMessage(
+                    "Build your factory."
+                );
+
             },
-
-            {
-                x: -this.grid,
-                y: 0,
-                opposite: "right"
-            },
-
-            {
-                x: 0,
-                y: this.grid,
-                opposite: "up"
-            },
-
-            {
-                x: 0,
-                y: -this.grid,
-                opposite: "down"
-            }
-        ];
-
-
-        for(
-            const direction
-            of directions
-        ) {
-
-            const object =
-                this.getObjectAt(
-                    item.x +
-                    direction.x,
-
-                    item.y +
-                    direction.y
-                );
-
-
-            if(
-                object &&
-                object.data.type ===
-                "conveyor"
-            ) {
-
-                if(
-                    object.direction ===
-                    direction.opposite
-                ) {
-
-                    return object;
-                }
-            }
-        }
-
-
-        return null;
-    }
-
-
-    /* =========================================================
-       NEXT TILE
-    ========================================================= */
-
-    getNextTile(conveyor) {
-
-        const direction =
-            conveyor.direction ||
-            "right";
-
-
-        const vectors = {
-
-            right: {
-                x: this.grid,
-                y: 0
-            },
-
-            left: {
-                x: -this.grid,
-                y: 0
-            },
-
-            up: {
-                x: 0,
-                y: -this.grid
-            },
-
-            down: {
-                x: 0,
-                y: this.grid
-            }
-        };
-
-
-        const vector =
-            vectors[direction] ||
-            vectors.right;
-
-
-        const nextX =
-            conveyor.x +
-            vector.x;
-
-        const nextY =
-            conveyor.y +
-            vector.y;
-
-
-        const nextObject =
-            this.getObjectAt(
-                nextX,
-                nextY
-            );
-
-
-        /*
-         * Collector / processing machines
-         * can receive the item.
-         */
-
-        if(
-            nextObject &&
-            this.canReceiveItem(
-                nextObject
-            )
-        ) {
-
-            return {
-                x: nextX,
-                y: nextY
-            };
-        }
-
-
-        /*
-         * Conveyor must exist and be
-         * correctly connected.
-         */
-
-        if(
-            nextObject &&
-            nextObject.data.type ===
-            "conveyor"
-        ) {
-
-            const requiredDirection =
-                this.getOpposite(
-                    direction
-                );
-
-
-            /*
-             * A conveyor can receive
-             * from the previous direction.
-             */
-
-            return {
-                x: nextX,
-                y: nextY
-            };
-        }
-
-
-        return null;
-    }
-
-
-    canReceiveItem(object) {
-
-        const types = [
-
-            "machine",
-            "collector",
-            "multiplier",
-            "booster",
-            "storage",
-            "splitter",
-            "merger",
-            "router",
-            "teleporter",
-            "charger",
-            "repair",
-            "cooler",
-            "blackhole",
-            "clone",
-            "bank",
-            "core",
-            "secret"
-        ];
-
-
-        return types.includes(
-            object.data.type
+            500
         );
     }
 
 
-    getOpposite(direction) {
+    /* ============================================================
+       DOM READY
+    ============================================================ */
 
-        const map = {
-
-            right: "left",
-            left: "right",
-            up: "down",
-            down: "up"
-        };
-
-
-        return (
-            map[direction] ||
-            "left"
-        );
-    }
-
-
-    /* =========================================================
-       ITEM SPEED
-    ========================================================= */
-
-    calculateItemSpeed(
-        item,
-        conveyor
+    if(
+        document.readyState ===
+        "loading"
     ) {
 
-        let speed =
-            Number(
-                conveyor.data.speed ||
-                1
-            );
+        document.addEventListener(
+            "DOMContentLoaded",
+            init
+        );
 
+    } else {
 
-        /*
-         * Nearby speed boosters
-         */
-
-        const boosters =
-            this.objects.filter(
-                object =>
-                    object.data.type ===
-                    "booster"
-            );
-
-
-        for(
-            const booster
-            of boosters
-        ) {
-
-            if(
-                this.distance(
-                    booster,
-                    conveyor
-                ) <= 100
-            ) {
-
-                speed *=
-                    Number(
-                        booster.data.multiplier ||
-                        1
-                    );
-            }
-        }
-
-
-        /*
-         * Time booster
-         */
-
-        const timeBoosters =
-            this.objects.filter(
-                object =>
-                    object.id ===
-                    "time_booster"
-            );
-
-
-        if(
-            timeBoosters.length
-        ) {
-
-            speed *= 1.25;
-        }
-
-
-        return speed;
+        init();
     }
 
-
-    /* =========================================================
-       MACHINE PROCESSING
-    ========================================================= */
-
-    processItemAtObject(
-        item,
-        object
-    ) {
-
-        const type =
-            object.data.type;
-
-
-        if(
-            type === "machine"
-        ) {
-
-            item.value *=
-                Number(
-                    object.data.multiplier ||
-                    1
-                );
-
-            return;
-        }
-
-
-        if(
-            type === "multiplier"
-        ) {
-
-            item.value *=
-                Number(
-                    object.data.multiplier ||
-                    1
-                );
-
-            return;
-        }
-
-
-        if(
-            type === "booster"
-        ) {
-
-            item.value *=
-                1.05;
-
-            return;
-        }
-
-
-        if(
-            type === "clone"
-        ) {
-
-            const clone =
-                this.cloneItem(
-                    item
-                );
-
-            this.items.push(
-                clone
-            );
-
-            return;
-        }
-
-
-        if(
-            type === "blackhole"
-        ) {
-
-            item.value *=
-                Number(
-                    object.data.multiplier ||
-                    1
-                );
-
-            return;
-        }
-
-
-        if(
-            type === "secret"
-        ) {
-
-            item.value *=
-                Number(
-                    object.data.multiplier ||
-                    1
-                );
-
-            return;
-        }
-
-
-        if(
-            type === "storage"
-        ) {
-
-            object.stored =
-                (object.stored || 0)
-                + item.value;
-
-            item.alive = false;
-
-            return;
-        }
-
-
-        if(
-            type === "teleporter"
-        ) {
-
-            this.teleportItem(
-                item,
-                object
-            );
-
-            return;
-        }
-
-
-        if(
-            type === "splitter"
-        ) {
-
-            item.direction =
-                this.getAlternateDirection(
-                    item.direction
-                );
-
-            return;
-        }
-    }
-
-
-    cloneItem(item) {
-
-        return {
-
-            id:
-                ++this.itemCounter,
-
-            x:
-                item.x,
-
-            y:
-                item.y,
-
-            previousX:
-                item.previousX,
-
-            previousY:
-                item.previousY,
-
-            progress:
-                item.progress,
-
-            value:
-                item.value,
-
-            speed:
-                item.speed,
-
-            alive: true,
-
-            lastObject:
-                item.lastObject,
-
-            direction:
-                item.direction
-        };
-    }
-
-
-    teleportItem(
-        item,
-        portal
-    ) {
-
-        const portals =
-            this.objects.filter(
-                object =>
-                    object.data.type ===
-                    "portal"
-            );
-
-
-        if(
-            portals.length < 2
-        )
-            return;
-
-
-        const other =
-            portals.find(
-                object =>
-                    object.uid !==
-                    portal.uid
-            );
-
-
-        if(other) {
-
-            item.x =
-                other.x;
-
-            item.y =
-                other.y;
-
-            item.progress =
-                0;
-        }
-    }
-
-
-    getAlternateDirection(
-        direction
-    ) {
-
-        if(
-            direction === "right"
-        )
-            return "down";
-
-        if(
-            direction === "down"
-        )
-            return "left";
-
-        if(
-            direction === "left"
-        )
-            return "up";
-
-        return "right";
-    }
-
-
-    /* =========================================================
-       COLLECTORS
-    ========================================================= */
-
-    processCollectors() {
-
-        let income = 0;
-
-
-        const collectors =
-            this.objects.filter(
-                object =>
-                    object.data.type ===
-                    "collector"
-            );
-
-
-        if(
-            collectors.length === 0
-        ) {
-
-            return 0;
-        }
-
-
-        for(
-            const item
-            of this.items
-        ) {
-
-            if(!item.alive)
-                continue;
-
-
-            for(
-                const collector
-                of collectors
-            ) {
-
-                if(
-                    this.distance(
-                        item,
-                        collector
-                    ) <=
-                    this.grid * 0.8
-                ) {
-
-                    let value =
-                        item.value;
-
-
-                    /*
-                     * Nearby multipliers
-                     */
-
-                    const multipliers =
-                        this.objects.filter(
-                            object =>
-                                object.data.type ===
-                                "multiplier"
-                        );
-
-
-                    for(
-                        const multiplier
-                        of multipliers
-                    ) {
-
-                        if(
-                            this.distance(
-                                multiplier,
-                                collector
-                            ) <= 150
-                        ) {
-
-                            value *=
-                                Number(
-                                    multiplier
-                                        .data
-                                        .multiplier ||
-                                    1
-                                );
-                        }
-                    }
-
-
-                    /*
-                     * Luck
-                     */
-
-                    const luck =
-                        this.objects.filter(
-                            object =>
-                                object.id ===
-                                "luck"
-                        );
-
-
-                    if(
-                        luck.length
-                    ) {
-
-                        if(
-                            Math.random() <
-                            0.05
-                        ) {
-
-                            value *= 5;
-                        }
-                    }
-
-
-                    /*
-                     * Jackpot
-                     */
-
-                    const jackpots =
-                        this.objects.filter(
-                            object =>
-                                object.id ===
-                                "jackpot"
-                        );
-
-
-                    if(
-                        jackpots.length
-                    ) {
-
-                        if(
-                            Math.random() <
-                            0.01
-                        ) {
-
-                            value *= 10;
-
-                            this.flashMessage(
-                                "JACKPOT!"
-                            );
-                        }
-                    }
-
-
-                    income +=
-                        value;
-
-
-                    item.alive =
-                        false;
-
-
-                    break;
-                }
-            }
-        }
-
-
-        return income;
-    }
-
-
-    findNearestCollector(
-        x,
-        y
-    ) {
-
-        const collectors =
-            this.getObjectsByType(
-                "collector"
-            );
-
-
-        let nearest =
-            null;
-
-        let best =
-            Infinity;
-
-
-        for(
-            const collector
-            of collectors
-        ) {
-
-            const distance =
-                Math.hypot(
-                    collector.x - x,
-                    collector.y - y
-                );
-
-
-            if(
-                distance < best
-            ) {
-
-                best =
-                    distance;
-
-                nearest =
-                    collector;
-            }
-        }
-
-
-        return nearest;
-    }
-
-
-    /* =========================================================
-       DRAW
-    ========================================================= */
-
-    draw() {
-
-        const rect =
-            this.canvas.getBoundingClientRect();
-
-
-        this.ctx.clearRect(
-            0,
-            0,
-            rect.width,
-            rect.height
-        );
-
-
-        this.drawBackground();
-
-        this.drawGrid();
-
-        this.drawFactory();
-
-        this.drawItems();
-
-        this.drawGhost();
-
-        this.drawHover();
-    }
-
-
-    /* =========================================================
-       BACKGROUND
-    ========================================================= */
-
-    drawBackground() {
-
-        const rect =
-            this.canvas.getBoundingClientRect();
-
-
-        const gradient =
-            this.ctx.createRadialGradient(
-                rect.width / 2,
-                rect.height / 2,
-                0,
-                rect.width / 2,
-                rect.height / 2,
-                Math.max(
-                    rect.width,
-                    rect.height
-                )
-            );
-
-
-        gradient.addColorStop(
-            0,
-            "#151515"
-        );
-
-
-        gradient.addColorStop(
-            1,
-            "#080808"
-        );
-
-
-        this.ctx.fillStyle =
-            gradient;
-
-
-        this.ctx.fillRect(
-            0,
-            0,
-            rect.width,
-            rect.height
-        );
-    }
-
-
-    /* =========================================================
-       GRID
-    ========================================================= */
-
-    drawGrid() {
-
-        const rect =
-            this.canvas.getBoundingClientRect();
-
-
-        const spacing =
-            this.grid *
-            this.camera.zoom;
-
-
-        let offsetX =
-            (
-                -this.camera.x *
-                this.camera.zoom +
-                rect.width / 2
-            ) % spacing;
-
-
-        let offsetY =
-            (
-                -this.camera.y *
-                this.camera.zoom +
-                rect.height / 2
-            ) % spacing;
-
-
-        if(offsetX < 0)
-            offsetX += spacing;
-
-        if(offsetY < 0)
-            offsetY += spacing;
-
-
-        this.ctx.strokeStyle =
-            "#171717";
-
-        this.ctx.lineWidth = 1;
-
-
-        for(
-            let x = offsetX;
-            x < rect.width;
-            x += spacing
-        ) {
-
-            this.ctx.beginPath();
-
-            this.ctx.moveTo(
-                Math.round(x) + .5,
-                0
-            );
-
-            this.ctx.lineTo(
-                Math.round(x) + .5,
-                rect.height
-            );
-
-            this.ctx.stroke();
-        }
-
-
-        for(
-            let y = offsetY;
-            y < rect.height;
-            y += spacing
-        ) {
-
-            this.ctx.beginPath();
-
-            this.ctx.moveTo(
-                0,
-                Math.round(y) + .5
-            );
-
-            this.ctx.lineTo(
-                rect.width,
-                Math.round(y) + .5
-            );
-
-            this.ctx.stroke();
-        }
-    }
-
-
-    /* =========================================================
-       FACTORY
-    ========================================================= */
-
-    drawFactory() {
-
-        for(
-            const object
-            of this.objects
-        ) {
-
-            this.drawObject(
-                object
-            );
-        }
-    }
-
-
-    /* =========================================================
-       OBJECT DRAW
-    ========================================================= */
-
-    drawObject(object) {
-
-        const ctx =
-            this.ctx;
-
-
-        const position =
-            this.worldToScreen(
-                object.x,
-                object.y
-            );
-
-
-        const size =
-            this.grid *
-            this.camera.zoom;
-
-
-        const half =
-            size / 2;
-
-
-        const data =
-            object.data;
-
-
-        /*
-         * Base
-         */
-
-        ctx.fillStyle =
-            "#111111";
-
-
-        ctx.fillRect(
-            position.x - half,
-            position.y - half,
-            size,
-            size
-        );
-
-
-        /*
-         * Border
-         */
-
-        ctx.strokeStyle =
-            object ===
-            this.selectedObject
-            ? "#eeeeee"
-            : "#373737";
-
-
-        ctx.lineWidth =
-            object ===
-            this.selectedObject
-            ? 2
-            : 1;
-
-
-        ctx.strokeRect(
-            position.x - half,
-            position.y - half,
-            size,
-            size
-        );
-
-
-        /*
-         * Conveyor
-         */
-
-        if(
-            data.type ===
-            "conveyor"
-        ) {
-
-            this.drawConveyor(
-                object,
-                position,
-                size
-            );
-
-            return;
-        }
-
-
-        /*
-         * Spawner
-         */
-
-        if(
-            data.type ===
-            "spawner"
-        ) {
-
-            this.drawSpawner(
-                object,
-                position,
-                size
-            );
-
-            return;
-        }
-
-
-        /*
-         * Collector
-         */
-
-        if(
-            data.type ===
-            "collector"
-        ) {
-
-            this.drawCollector(
-                object,
-                position,
-                size
-            );
-
-            return;
-        }
-
-
-        /*
-         * Generic machine
-         */
-
-        this.drawMachine(
-            object,
-            position,
-            size
-        );
-    }
-
-
-    /* =========================================================
-       CONVEYOR DRAW
-    ========================================================= */
-
-    drawConveyor(
-        object,
-        position,
-        size
-    ) {
-
-        const ctx =
-            this.ctx;
-
-
-        const direction =
-            object.direction ||
-            "right";
-
-
-        ctx.save();
-
-        ctx.translate(
-            position.x,
-            position.y
-        );
-
-
-        const angle = {
-
-            right: 0,
-
-            down:
-                Math.PI / 2,
-
-            left:
-                Math.PI,
-
-            up:
-                -Math.PI / 2
-
-        }[direction] || 0;
-
-
-        ctx.rotate(
-            angle
-        );
-
-
-        /*
-         * Belt lines
-         */
-
-        ctx.strokeStyle =
-            "#303030";
-
-        ctx.lineWidth = 2;
-
-
-        ctx.beginPath();
-
-        ctx.moveTo(
-            -size * .35,
-            -size * .17
-        );
-
-        ctx.lineTo(
-            size * .35,
-            -size * .17
-        );
-
-        ctx.stroke();
-
-
-        ctx.beginPath();
-
-        ctx.moveTo(
-            -size * .35,
-            size * .17
-        );
-
-        ctx.lineTo(
-            size * .35,
-            size * .17
-        );
-
-        ctx.stroke();
-
-
-        /*
-         * Direction arrow
-         */
-
-        ctx.strokeStyle =
-            "#999";
-
-        ctx.lineWidth = 2;
-
-
-        ctx.beginPath();
-
-        ctx.moveTo(
-            -size * .2,
-            0
-        );
-
-        ctx.lineTo(
-            size * .2,
-            0
-        );
-
-        ctx.stroke();
-
-
-        ctx.beginPath();
-
-        ctx.moveTo(
-            size * .05,
-            -size * .1
-        );
-
-        ctx.lineTo(
-            size * .2,
-            0
-        );
-
-        ctx.lineTo(
-            size * .05,
-            size * .1
-        );
-
-        ctx.stroke();
-
-
-        ctx.restore();
-    }
-
-
-    /* =========================================================
-       SPAWNER DRAW
-    ========================================================= */
-
-    drawSpawner(
-        object,
-        position,
-        size
-    ) {
-
-        const ctx =
-            this.ctx;
-
-
-        ctx.fillStyle =
-            "#252525";
-
-
-        ctx.beginPath();
-
-        ctx.arc(
-            position.x,
-            position.y,
-            size * .27,
-            0,
-            Math.PI * 2
-        );
-
-        ctx.fill();
-
-
-        ctx.strokeStyle =
-            "#aaaaaa";
-
-        ctx.lineWidth = 2;
-
-
-        ctx.stroke();
-
-
-        /*
-         * Spawn pulse
-         */
-
-        const timer =
-            object.timer || 0;
-
-
-        const interval =
-            Number(
-                object.data.interval || 1
-            );
-
-
-        const progress =
-            Math.min(
-                1,
-                timer / interval
-            );
-
-
-        ctx.strokeStyle =
-            "#666";
-
-
-        ctx.beginPath();
-
-        ctx.arc(
-            position.x,
-            position.y,
-            size * .38,
-            -Math.PI / 2,
-            -Math.PI / 2 +
-            Math.PI * 2 *
-            progress
-        );
-
-        ctx.stroke();
-    }
-
-
-    /* =========================================================
-       COLLECTOR DRAW
-    ========================================================= */
-
-    drawCollector(
-        object,
-        position,
-        size
-    ) {
-
-        const ctx =
-            this.ctx;
-
-
-        ctx.fillStyle =
-            "#222";
-
-
-        ctx.fillRect(
-            position.x -
-            size * .3,
-
-            position.y -
-            size * .3,
-
-            size * .6,
-            size * .6
-        );
-
-
-        ctx.strokeStyle =
-            "#ddd";
-
-        ctx.lineWidth = 2;
-
-
-        ctx.strokeRect(
-            position.x -
-            size * .3,
-
-            position.y -
-            size * .3,
-
-            size * .6,
-            size * .6
-        );
-
-
-        ctx.fillStyle =
-            "#eee";
-
-
-        ctx.font =
-            `bold ${
-                Math.max(
-                    8,
-                    size * .25
-                )
-            }px monospace`;
-
-
-        ctx.textAlign =
-            "center";
-
-
-        ctx.textBaseline =
-            "middle";
-
-
-        ctx.fillText(
-            "$",
-            position.x,
-            position.y
-        );
-    }
-
-
-    /* =========================================================
-       MACHINE DRAW
-    ========================================================= */
-
-    drawMachine(
-        object,
-        position,
-        size
-    ) {
-
-        const ctx =
-            this.ctx;
-
-
-        const data =
-            object.data;
-
-
-        const inset =
-            size * .14;
-
-
-        ctx.fillStyle =
-            "#191919";
-
-
-        ctx.fillRect(
-            position.x -
-            size / 2 +
-            inset,
-
-            position.y -
-            size / 2 +
-            inset,
-
-            size -
-            inset * 2,
-
-            size -
-            inset * 2
-        );
-
-
-        ctx.strokeStyle =
-            "#454545";
-
-        ctx.lineWidth = 1;
-
-
-        ctx.strokeRect(
-            position.x -
-            size / 2 +
-            inset,
-
-            position.y -
-            size / 2 +
-            inset,
-
-            size -
-            inset * 2,
-
-            size -
-            inset * 2
-        );
-
-
-        /*
-         * Icon
-         */
-
-        ctx.fillStyle =
-            "#bdbdbd";
-
-
-        ctx.font =
-            `bold ${
-                Math.max(
-                    7,
-                    size * .22
-                )
-            }px monospace`;
-
-
-        ctx.textAlign =
-            "center";
-
-
-        ctx.textBaseline =
-            "middle";
-
-
-        ctx.fillText(
-            data.icon ||
-            "?",
-
-            position.x,
-            position.y
-        );
-    }
-
-
-    /* =========================================================
-       ITEMS
-    ========================================================= */
-
-    drawItems() {
-
-        for(
-            const item of this.items
-        ) {
-
-            if(!item.alive)
-                continue;
-
-
-            const position =
-                this.getInterpolatedItemPosition(
-                    item
-                );
-
-
-            const screen =
-                this.worldToScreen(
-                    position.x,
-                    position.y
-                );
-
-
-            const size =
-                Math.max(
-                    4,
-                    7 *
-                    this.camera.zoom
-                );
-
-
-            this.ctx.fillStyle =
-                "#eeeeee";
-
-
-            this.ctx.fillRect(
-                screen.x -
-                size / 2,
-
-                screen.y -
-                size / 2,
-
-                size,
-                size
-            );
-        }
-    }
-
-
-    getInterpolatedItemPosition(
-        item
-    ) {
-
-        const t =
-            Math.max(
-                0,
-                Math.min(
-                    1,
-                    item.progress
-                )
-            );
-
-
-        return {
-
-            x:
-                item.x,
-
-            y:
-                item.y
-        };
-    }
-
-
-    /* =========================================================
-       GHOST
-    ========================================================= */
-
-    drawGhost() {
-
-        if(
-            !this.buildDefinition
-        )
-            return;
-
-
-        const world =
-            this.lastMouseWorld;
-
-
-        if(!world)
-            return;
-
-
-        const point =
-            this.snapPoint(
-                world.x,
-                world.y
-            );
-
-
-        const screen =
-            this.worldToScreen(
-                point.x,
-                point.y
-            );
-
-
-        const size =
-            this.grid *
-            this.camera.zoom;
-
-
-        const occupied =
-            !!this.getObjectAt(
-                point.x,
-                point.y
-            );
-
-
-        this.ctx.save();
-
-
-        this.ctx.strokeStyle =
-            occupied
-            ? "#666"
-            : "#aaa";
-
-
-        this.ctx.setLineDash([
-            5,
-            4
-        ]);
-
-
-        this.ctx.strokeRect(
-            screen.x -
-            size / 2,
-
-            screen.y -
-            size / 2,
-
-            size,
-            size
-        );
-
-
-        this.ctx.setLineDash([]);
-
-
-        this.ctx.globalAlpha =
-            occupied
-            ? .25
-            : .55;
-
-
-        this.ctx.fillStyle =
-            "#aaa";
-
-
-        this.ctx.fillRect(
-            screen.x -
-            size / 2,
-
-            screen.y -
-            size / 2,
-
-            size,
-            size
-        );
-
-
-        this.ctx.globalAlpha =
-            1;
-
-
-        this.ctx.fillStyle =
-            "#fff";
-
-
-        this.ctx.font =
-            `bold ${
-                Math.max(
-                    8,
-                    size * .22
-                )
-            }px monospace`;
-
-
-        this.ctx.textAlign =
-            "center";
-
-
-        this.ctx.textBaseline =
-            "middle";
-
-
-        this.ctx.fillText(
-            this.buildDefinition.icon ||
-            "?",
-
-            screen.x,
-            screen.y
-        );
-
-
-        this.ctx.restore();
-    }
-
-
-    /* =========================================================
-       HOVER
-    ========================================================= */
-
-    drawHover() {
-
-        if(
-            !this.hoveredObject ||
-            this.buildDefinition
-        )
-            return;
-
-
-        const screen =
-            this.worldToScreen(
-                this.hoveredObject.x,
-                this.hoveredObject.y
-            );
-
-
-        const size =
-            this.grid *
-            this.camera.zoom;
-
-
-        this.ctx.strokeStyle =
-            "#555";
-
-
-        this.ctx.lineWidth = 1;
-
-
-        this.ctx.strokeRect(
-            screen.x -
-            size / 2 -
-            3,
-
-            screen.y -
-            size / 2 -
-            3,
-
-            size + 6,
-            size + 6
-        );
-    }
-
-
-    /* =========================================================
-       DISTANCE
-    ========================================================= */
-
-    distance(a, b) {
-
-        return Math.hypot(
-            a.x - b.x,
-            a.y - b.y
-        );
-    }
-
-
-    /* =========================================================
-       CLEAR
-    ========================================================= */
-
-    clearFactory() {
-
-        this.objects = [];
-
-        this.items = [];
-
-        this.selectedObject = null;
-    }
-
-
-    /* =========================================================
-       FLOOR DATA
-    ========================================================= */
-
-    exportFloor() {
-
-        return this.objects.map(
-            object => ({
-
-                id:
-                    object.id,
-
-                x:
-                    object.x,
-
-                y:
-                    object.y,
-
-                rotation:
-                    object.rotation,
-
-                direction:
-                    object.direction
-            })
-        );
-    }
-
-
-    importFloor(data) {
-
-        this.objects = [];
-
-        this.items = [];
-
-
-        if(
-            !Array.isArray(data)
-        )
-            return;
-
-
-        for(
-            const saved of data
-        ) {
-
-            const definition =
-                OBJECTS.find(
-                    object =>
-                        object.id ===
-                        saved.id
-                );
-
-
-            if(!definition)
-                continue;
-
-
-            this.objects.push({
-
-                uid:
-                    this.createUID(),
-
-                id:
-                    saved.id,
-
-                x:
-                    saved.x,
-
-                y:
-                    saved.y,
-
-                rotation:
-                    saved.rotation ||
-                    0,
-
-                direction:
-                    saved.direction ||
-                    this.getDefaultDirection(
-                        definition
-                    ),
-
-                data:
-                    definition,
-
-                timer: 0,
-
-                progress: 0
-            });
-        }
-    }
-
-
-    /* =========================================================
-       EVENTS
-    ========================================================= */
-
-    emitObjectPlaced(
-        object
-    ) {
-
-        window.dispatchEvent(
-            new CustomEvent(
-                "factoryObjectPlaced",
-                {
-                    detail: object
-                }
-            )
-        );
-    }
-
-
-    emitObjectDeleted(
-        object
-    ) {
-
-        window.dispatchEvent(
-            new CustomEvent(
-                "factoryObjectDeleted",
-                {
-                    detail: object
-                }
-            )
-        );
-    }
-
-
-    flashMessage(
-        message
-    ) {
-
-        window.dispatchEvent(
-            new CustomEvent(
-                "factoryMessage",
-                {
-                    detail: {
-                        message
-                    }
-                }
-            )
-        );
-    }
-
-
-    /* =========================================================
-       UID
-    ========================================================= */
-
-    createUID() {
-
-        if(
-            typeof crypto !==
-            "undefined" &&
-            crypto.randomUUID
-        ) {
-
-            return crypto.randomUUID();
-        }
-
-
-        return (
-            Date.now()
-            .toString(36)
-            +
-            Math.random()
-                .toString(36)
-                .slice(2)
-        );
-    }
-
-
-    /* =========================================================
-       MAIN LOOP
-    ========================================================= */
-
-    loop(time) {
-
-        let dt =
-            (time -
-            this.lastTime) /
-            1000;
-
-
-        this.lastTime =
-            time;
-
-
-        /*
-         * Prevent giant jumps after
-         * tab switching.
-         */
-
-        dt =
-            Math.min(
-                dt,
-                0.1
-            );
-
-
-        this.update(
-            dt
-        );
-
-
-        this.draw();
-
-
-        window.dispatchEvent(
-            new CustomEvent(
-                "factoryTick",
-                {
-                    detail: {
-
-                        money:
-                            this.money,
-
-                        production:
-                            this.production,
-
-                        objectCount:
-                            this.objects.length,
-
-                        itemCount:
-                            this.items.length
-                    }
-                }
-            )
-        );
-
-
-        requestAnimationFrame(
-            nextTime =>
-                this.loop(
-                    nextTime
-                )
-        );
-    }
-    }
+})();
